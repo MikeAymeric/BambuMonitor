@@ -1,0 +1,9 @@
+name: BambuMonitor
+version: 1.0.0
+description: BambuLab P2S print status monitor — OLED + LED matrix
+author: ""
+python:
+  entrypoint: python/main.py
+  requirements: python/requirements.txt
+sketch:
+  entrypoint: sketch/sketch.ino
