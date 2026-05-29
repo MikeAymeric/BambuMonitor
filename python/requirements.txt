@@ -1,0 +1,2 @@
+# arduino_alp (Bridge runtime) is pre-installed on UNO Q Linux — do NOT pip install it
+paho-mqtt==1.6.1

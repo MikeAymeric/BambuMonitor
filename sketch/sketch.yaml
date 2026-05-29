@@ -1,0 +1,19 @@
+profiles:
+  default:
+    fqbn: arduino:zephyr:unoq
+    platforms:
+      - platform: arduino:zephyr
+    libraries:
+      # Bridge RPC dependencies (RouterBridge itself is now bundled in arduino:zephyr >0.54.1)
+      - Arduino_RPClite (0.2.1)
+      - ArxContainer (0.7.0)
+      - ArxTypeTraits (0.3.2)
+      - DebugLog (0.8.4)
+      - MsgPack (0.4.2)
+      # OLED display
+      - U8g2 (2.36.19)
+      # JSON parsing — v6 required: v7 uses strlcpy which is missing in Zephyr libc
+      - ArduinoJson (6.21.5)
+      # Arduino_LED_Matrix is bundled with arduino:zephyr core — no entry needed
+
+default_profile: default
