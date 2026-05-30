@@ -10,18 +10,22 @@ Displays live print data on an SH1106 OLED display, shows animated status on the
 | Component | Details |
 |---|---|
 | **Board** | Arduino UNO Q (Qualcomm QRB2210 Linux + STMicroelectronics STM32U585) |
-| **Display** | 128×64 OLED I2C — SH1106 |
+| **Display** | 240×240 Round TFT SPI — GC9A01 |
 | **LED Matrix** | 13×8 built-in (on-board, no wiring needed) |
 | **Buttons** | 2× tactile push button |
 
-### OLED Wiring (all pins at 3.3 V — no level shifter needed)
+### TFT Wiring (all pins at 3.3 V — no level shifter needed)
 
-| OLED Pin | Arduino UNO Q |
-|----------|---------------|
-| VCC | 3.3V |
-| GND | GND |
-| SCK | SCL (A5 on JDIGITAL, or Qwiic SCL) |
-| SDA | SDA (A4 on JDIGITAL, or Qwiic SDA) |
+| GC9A01 Pin | Arduino UNO Q | Function |
+|------------|---------------|----------|
+| VCC | 3.3V | Power |
+| GND | GND | Ground |
+| SCL | D13 | SPI Clock |
+| SDA | D11 | SPI MOSI |
+| CS | D10 | Chip Select |
+| DC | D9 | Data/Command |
+| RST | D8 | Reset |
+| BLK | D7 | Backlight |
 
 ### Button Wiring
 
@@ -123,7 +127,9 @@ Install the following libraries via the **App Lab Library Manager**:
 | `ArxTypeTraits` | Bridge dependency |
 | `DebugLog` | Bridge dependency |
 | `MsgPack` | Bridge dependency |
-| `U8g2` | OLED driver |
+| `Adafruit GC9A01A` | TFT display driver |
+| `Adafruit GFX Library` | Graphics primitives |
+| `Adafruit BusIO` | SPI/I2C abstraction |
 | `ArduinoJson` | JSON parsing (v6) |
 
 > `Arduino_RouterBridge` and `Arduino_LED_Matrix` are bundled with the `arduino:zephyr` platform — do **not** add them manually.

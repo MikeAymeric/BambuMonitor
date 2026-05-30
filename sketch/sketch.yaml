@@ -4,16 +4,18 @@ profiles:
     platforms:
       - platform: arduino:zephyr
     libraries:
-      # Bridge RPC dependencies (RouterBridge itself is now bundled in arduino:zephyr >0.54.1)
+      # Bridge RPC dependencies (RouterBridge is bundled in arduino:zephyr >0.54.1)
       - Arduino_RPClite (0.2.1)
       - ArxContainer (0.7.0)
       - ArxTypeTraits (0.3.2)
       - DebugLog (0.8.4)
       - MsgPack (0.4.2)
-      # OLED display
-      - U8g2 (2.36.19)
-      # JSON parsing — v6 required: v7 uses strlcpy which is missing in Zephyr libc
+      # TFT display
+      - Adafruit GC9A01A (1.1.1)
+      - Adafruit GFX Library (1.12.6)
+      - Adafruit BusIO (1.16.2)
+      # JSON parsing — v6 required (v7 uses strlcpy missing in Zephyr libc)
       - ArduinoJson (6.21.5)
-      # Arduino_LED_Matrix is bundled with arduino:zephyr core — no entry needed
+      # Arduino_LED_Matrix is bundled with arduino:zephyr — no entry needed
 
 default_profile: default

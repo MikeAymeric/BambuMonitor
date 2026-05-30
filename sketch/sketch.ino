@@ -1,24 +1,49 @@
 /*
  * BambuMonitor — Arduino UNO Q (STM32U585)
+ * GC9A01 240×240 Round TFT version
  *
- * 6 info screens, cycled with 2 buttons:
+ * Wiring (all 3.3V — no level shifter needed):
+ *   VCC → 3.3V    GND → GND
+ *   SCL → D13     SDA → D11
+ *   CS  → D10     DC  → D9
+ *   RST → D8      BLK → D7  (backlight)
+ *
+ * Buttons (pin → GND, INPUT_PULLUP):
  *   D2 → previous screen
  *   D3 → next screen
  *
- * OLED I2C SH1106 128x64:
- *   VCC → 3.3V  GND → GND
- *   SCK → SCL (A5)   SDA → SDA (A4)
- *
- * Libraries: Arduino_RouterBridge, Arduino_LED_Matrix, U8g2, ArduinoJson
+ * Libraries: Arduino_RouterBridge (bundled), Arduino_LED_Matrix (bundled),
+ *            Adafruit_GC9A01A, Adafruit_GFX, ArduinoJson 6
  */
 
 #include <Arduino_RouterBridge.h>
 #include <Arduino_LED_Matrix.h>
-#include <U8g2lib.h>
+#include <Adafruit_GC9A01A.h>
+#include <Adafruit_GFX.h>
+#include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 #include <ArduinoJson.h>
 
-// ── OLED ──────────────────────────────────────────────────────────────────────
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+// ── TFT ───────────────────────────────────────────────────────────────────────
+#define TFT_CS  10
+#define TFT_DC   9
+#define TFT_RST  8
+#define TFT_BL   7
+Adafruit_GC9A01A tft(TFT_CS, TFT_DC, TFT_RST);
+
+// ── Colors ────────────────────────────────────────────────────────────────────
+#define COL_BG      0x0000
+#define COL_WHITE   0xFFFF
+#define COL_LGRAY   0xC618
+#define COL_DGRAY   0x2945
+#define COL_GREEN   0x07E0
+#define COL_DKGREEN 0x0280
+#define COL_ORANGE  0xFC40
+#define COL_RED     0xF800
+#define COL_YELLOW  0xFFE0
+#define COL_CYAN    0x07FF
+#define COL_BLUE    0x325F
 
 // ── LED Matrix ────────────────────────────────────────────────────────────────
 ArduinoLEDMatrix matrix;
@@ -27,29 +52,30 @@ uint8_t frame[8 * 13];
 // ── Buttons ───────────────────────────────────────────────────────────────────
 const int BTN_PREV = 2;
 const int BTN_NEXT = 3;
-bool      btnPrevState = false, btnNextState = false;
+bool btnPrevState = false, btnNextState = false;
 unsigned long btnPrevMs = 0, btnNextMs = 0;
 const unsigned long DEBOUNCE_MS = 50;
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 enum Screen { SCR_PROGRESS, SCR_TEMPS, SCR_FANS, SCR_PRINTINFO, SCR_FILAMENT, SCR_SYSTEM };
 const int SCR_COUNT = 6;
-int currentScreen = SCR_PROGRESS;
+int  currentScreen  = SCR_PROGRESS;
+int  prevScreen     = -1;   // forces full redraw on first draw
 
 // ── Print state ───────────────────────────────────────────────────────────────
 struct State {
-  int  pct  = 0;    // completion %
-  int  rem  = 0;    // remaining minutes
-  int  ln   = 0;    // current layer
-  int  tln  = 0;    // total layers
-  int  nt   = 0;    // nozzle temp actual
-  int  ntt  = 0;    // nozzle temp target
-  int  bt   = 0;    // bed temp actual
-  int  btt  = 0;    // bed temp target
-  int  ct   = 0;    // chamber temp
-  int  cf   = 0;    // cooling fan %
-  int  spd  = 100;  // print speed %
-  int  ar   = 0;    // AMS filament remaining %
+  int  pct  = 0;
+  int  rem  = 0;
+  int  ln   = 0;
+  int  tln  = 0;
+  int  nt   = 0;
+  int  ntt  = 0;
+  int  bt   = 0;
+  int  btt  = 0;
+  int  ct   = 0;
+  int  cf   = 0;
+  int  spd  = 100;
+  int  ar   = 0;
   char st[12] = "IDLE";
   char nm[11] = "";
   char nd[4]  = "0.4";
@@ -72,7 +98,6 @@ void parseJson(const String& json) {
     lastReceived = millis();
     return;
   }
-
   prn.pct = doc["pct"] | prn.pct;
   prn.rem = doc["rem"] | prn.rem;
   prn.ln  = doc["ln"]  | prn.ln;
@@ -85,179 +110,249 @@ void parseJson(const String& json) {
   prn.cf  = doc["cf"]  | prn.cf;
   prn.spd = doc["spd"] | prn.spd;
   prn.ar  = doc["ar"]  | prn.ar;
-
   if (doc["st"].is<const char*>())  snprintf(prn.st,  sizeof(prn.st),  "%s", (const char*)doc["st"]);
   if (doc["nm"].is<const char*>())  snprintf(prn.nm,  sizeof(prn.nm),  "%s", (const char*)doc["nm"]);
   if (doc["nd"].is<const char*>())  snprintf(prn.nd,  sizeof(prn.nd),  "%s", (const char*)doc["nd"]);
   if (doc["at"].is<const char*>())  snprintf(prn.at,  sizeof(prn.at),  "%s", (const char*)doc["at"]);
   if (doc["as"].is<const char*>())  snprintf(prn.as_, sizeof(prn.as_), "%s", (const char*)doc["as"]);
   if (doc["ab"].is<const char*>())  snprintf(prn.ab,  sizeof(prn.ab),  "%s", (const char*)doc["ab"]);
-
   lastReceived = millis();
 }
-
 void handleUpd1(String json) { parseJson(json); }
 void handleUpd2(String json) { parseJson(json); }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+// Print centered text at given y, return actual y after text
+void centerText(const char* txt, int y, uint16_t color, const GFXfont* font = nullptr) {
+  tft.setFont(font);
+  tft.setTextColor(color, COL_BG);
+  tft.setTextSize(1);
+  int16_t x1, y1; uint16_t w, h;
+  tft.getTextBounds(txt, 0, y, &x1, &y1, &w, &h);
+  tft.setCursor((240 - w) / 2, y);
+  tft.print(txt);
+}
+
+// Clear a horizontal band
+void clearBand(int y, int h) {
+  tft.fillRect(0, y, 240, h, COL_BG);
+}
+
+// Format time
 void fmtTime(char* buf, int mins) {
   int h = mins / 60, m = mins % 60;
   if (h > 0) snprintf(buf, 10, "%dh %02dm", h, m);
   else        snprintf(buf, 10, "%dm", m);
 }
 
-// ── Icons (11x11 px drawn with U8g2 primitives) ───────────────────────────────
-void drawIcon(int x, int y, int scr) {
-  switch (scr) {
-    case SCR_PROGRESS:
-      u8g2.drawBox(x,   y+7, 3, 4);
-      u8g2.drawBox(x+4, y+4, 3, 7);
-      u8g2.drawBox(x+8, y+1, 3, 10);
-      u8g2.drawHLine(x, y+11, 11);
-      break;
-    case SCR_TEMPS:
-      u8g2.drawBox(x+4, y+1, 3, 6);
-      u8g2.drawCircle(x+5, y+9, 3, U8G2_DRAW_ALL);
-      u8g2.drawBox(x+5, y+6, 1, 4);
-      break;
-    case SCR_FANS:
-      u8g2.drawCircle(x+5, y+5, 5, U8G2_DRAW_ALL);
-      u8g2.drawCircle(x+5, y+5, 1, U8G2_DRAW_ALL);
-      u8g2.drawLine(x+5, y+1, x+5, y+4);
-      u8g2.drawLine(x+5, y+6, x+5, y+9);
-      u8g2.drawLine(x+1, y+5, x+4, y+5);
-      u8g2.drawLine(x+6, y+5, x+9, y+5);
-      break;
-    case SCR_PRINTINFO:
-      u8g2.drawFrame(x+1, y, 9, 11);
-      u8g2.drawHLine(x+3, y+3, 5);
-      u8g2.drawHLine(x+3, y+5, 5);
-      u8g2.drawHLine(x+3, y+7, 5);
-      break;
-    case SCR_FILAMENT:
-      u8g2.drawCircle(x+5, y+5, 5, U8G2_DRAW_ALL);
-      u8g2.drawCircle(x+5, y+5, 2, U8G2_DRAW_ALL);
-      u8g2.drawPixel(x+5, y+5);
-      break;
-    case SCR_SYSTEM:
-      u8g2.drawCircle(x+5, y+5, 3, U8G2_DRAW_ALL);
-      u8g2.drawBox(x+4, y,   3, 2);
-      u8g2.drawBox(x+4, y+9, 3, 2);
-      u8g2.drawBox(x,   y+4, 2, 3);
-      u8g2.drawBox(x+9, y+4, 2, 3);
-      break;
+// Draw arc ring (progress indicator) — center cx,cy, radius r, thickness thick
+// startAngle=-90 (top), progress 0-100
+void drawProgressRing(int cx, int cy, int r, int thick, int pct) {
+  // Background ring (dark green)
+  for (int t = 0; t < thick; t++) {
+    tft.drawCircle(cx, cy, r - t, COL_DKGREEN);
   }
+  // Foreground arc
+  float endDeg = -90.0f + 360.0f * pct / 100.0f;
+  uint16_t col = pct < 30 ? COL_CYAN : pct < 70 ? COL_GREEN : COL_ORANGE;
+  for (float a = -90.0f; a <= endDeg; a += 1.2f) {
+    float rad = a * DEG_TO_RAD;
+    for (int t = 0; t < thick; t++) {
+      int px = cx + (r - t) * cosf(rad);
+      int py = cy + (r - t) * sinf(rad);
+      tft.drawPixel(px, py, col);
+    }
+  }
+}
+
+// Horizontal bar (x, y, total_w, h, percent, fg, bg)
+void drawBar(int x, int y, int w, int h, int pct, uint16_t fg, uint16_t bg) {
+  tft.fillRect(x, y, w, h, bg);
+  int filled = (int)(w * pct / 100.0f);
+  if (filled > 0) tft.fillRect(x, y, filled, h, fg);
+  tft.drawRect(x, y, w, h, COL_LGRAY);
 }
 
 // ── Page dots ─────────────────────────────────────────────────────────────────
 void drawPageDots() {
-  int startX = (128 - SCR_COUNT * 8 + 2) / 2;
+  int dotR = 4, spacing = 14;
+  int totalW = (SCR_COUNT - 1) * spacing;
+  int startX = (240 - totalW) / 2;
   for (int i = 0; i < SCR_COUNT; i++) {
-    int x = startX + i * 8;
-    if (i == currentScreen) u8g2.drawBox(x, 61, 4, 3);
-    else                    u8g2.drawFrame(x, 61, 4, 3);
+    int x = startX + i * spacing;
+    if (i == currentScreen)
+      tft.fillCircle(x, 218, dotR, COL_WHITE);
+    else
+      tft.drawCircle(x, 218, dotR, COL_DGRAY);
   }
 }
 
-// ── Screen header ─────────────────────────────────────────────────────────────
-void drawHeader(int scr, const char* title) {
-  drawIcon(0, 0, scr);
-  u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(14, 10, title);
-  u8g2.drawHLine(0, 12, 128);
+// ── State color ───────────────────────────────────────────────────────────────
+uint16_t stateColor() {
+  if (strcmp(prn.st, "RUNNING") == 0) return COL_GREEN;
+  if (strcmp(prn.st, "PAUSE")   == 0) return COL_YELLOW;
+  if (strcmp(prn.st, "FAILED")  == 0) return COL_RED;
+  if (strcmp(prn.st, "FINISH")  == 0) return COL_CYAN;
+  return COL_LGRAY;
 }
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 void drawProgress() {
-  drawHeader(SCR_PROGRESS, "PROGRESS");
-  u8g2.drawFrame(0, 15, 128, 7);
-  int filled = (int)(128.0f * prn.pct / 100.0f);
-  if (filled > 0) u8g2.drawBox(0, 15, filled, 7);
+  // Progress ring
+  drawProgressRing(120, 108, 105, 11, prn.pct);
 
-  u8g2.setFont(u8g2_font_6x10_tf);
+  // Large percentage in center
+  char pctStr[6]; snprintf(pctStr, sizeof(pctStr), "%d%%", prn.pct);
+  clearBand(78, 36);
+  centerText(pctStr, 110, COL_WHITE, &FreeSansBold18pt7b);
+
+  // Status pill below %
+  clearBand(116, 16);
+  centerText(prn.st, 128, stateColor(), &FreeSans9pt7b);
+
+  // Data rows
   char buf[24], t[10];
-  snprintf(buf, sizeof(buf), "%d%%", prn.pct);
-  u8g2.drawStr(106, 10, buf);
+  clearBand(138, 60);
 
   fmtTime(t, prn.rem);
-  snprintf(buf, sizeof(buf), "Rem    %s", t);
-  u8g2.drawStr(0, 34, buf);
+  snprintf(buf, sizeof(buf), "Rem  %s", t);
+  centerText(buf, 152, COL_LGRAY, &FreeSans9pt7b);
 
   fmtTime(t, calcElapsed());
-  snprintf(buf, sizeof(buf), "Elap   %s", t);
-  u8g2.drawStr(0, 44, buf);
+  snprintf(buf, sizeof(buf), "Elap %s", t);
+  centerText(buf, 170, COL_LGRAY, &FreeSans9pt7b);
 
-  snprintf(buf, sizeof(buf), "Layer  %d / %d", prn.ln, prn.tln);
-  u8g2.drawStr(0, 54, buf);
+  snprintf(buf, sizeof(buf), "Lay %d / %d", prn.ln, prn.tln);
+  centerText(buf, 188, COL_DGRAY, &FreeSans9pt7b);
 }
 
 void drawTemps() {
-  drawHeader(SCR_TEMPS, "TEMPERATURES");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  centerText("TEMPERATURES", 30, COL_WHITE, &FreeSans9pt7b);
+  tft.drawFastHLine(40, 38, 160, COL_DGRAY);
+
   char buf[24];
-  snprintf(buf, sizeof(buf), "Nozzle %3d/%3d \xb0""C", prn.nt, prn.ntt);
-  u8g2.drawStr(0, 26, buf);
-  snprintf(buf, sizeof(buf), "Bed    %3d/%3d \xb0""C", prn.bt, prn.btt);
-  u8g2.drawStr(0, 38, buf);
-  snprintf(buf, sizeof(buf), "Chamber   %3d \xb0""C", prn.ct);
-  u8g2.drawStr(0, 50, buf);
+  // Nozzle — orange
+  snprintf(buf, sizeof(buf), "Nozzle");
+  centerText(buf, 70, COL_LGRAY, &FreeSans9pt7b);
+  snprintf(buf, sizeof(buf), "%d / %d \xb0""C", prn.nt, prn.ntt);
+  centerText(buf, 92, COL_ORANGE, &FreeSansBold12pt7b);
+
+  // Bed — cyan
+  snprintf(buf, sizeof(buf), "Bed");
+  centerText(buf, 118, COL_LGRAY, &FreeSans9pt7b);
+  snprintf(buf, sizeof(buf), "%d / %d \xb0""C", prn.bt, prn.btt);
+  centerText(buf, 140, COL_CYAN, &FreeSansBold12pt7b);
+
+  // Chamber — light gray
+  snprintf(buf, sizeof(buf), "Chamber");
+  centerText(buf, 166, COL_LGRAY, &FreeSans9pt7b);
+  snprintf(buf, sizeof(buf), "%d \xb0""C", prn.ct);
+  centerText(buf, 188, COL_WHITE, &FreeSansBold12pt7b);
 }
 
 void drawFans() {
-  drawHeader(SCR_FANS, "FANS & SPEED");
-  u8g2.setFont(u8g2_font_6x10_tf);
-  char buf[24];
-  snprintf(buf, sizeof(buf), "Print    %3d%%", prn.spd); u8g2.drawStr(0, 32, buf);
-  snprintf(buf, sizeof(buf), "Cooling  %3d%%", prn.cf);  u8g2.drawStr(0, 48, buf);
+  centerText("FANS & SPEED", 30, COL_WHITE, &FreeSans9pt7b);
+  tft.drawFastHLine(40, 38, 160, COL_DGRAY);
+
+  char buf[16];
+
+  // Print speed
+  centerText("Print speed", 68, COL_LGRAY, &FreeSans9pt7b);
+  snprintf(buf, sizeof(buf), "%d%%", prn.spd);
+  centerText(buf, 90, COL_WHITE, &FreeSansBold18pt7b);
+  drawBar(55, 100, 130, 8, prn.spd, COL_BLUE, COL_DGRAY);
+
+  // Cooling fan
+  centerText("Cooling fan", 128, COL_LGRAY, &FreeSans9pt7b);
+  snprintf(buf, sizeof(buf), "%d%%", prn.cf);
+  centerText(buf, 150, COL_CYAN, &FreeSansBold18pt7b);
+  drawBar(55, 160, 130, 8, prn.cf, COL_CYAN, COL_DGRAY);
 }
 
 void drawPrintInfo() {
-  drawHeader(SCR_PRINTINFO, "PRINT INFO");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  centerText("PRINT INFO", 30, COL_WHITE, &FreeSans9pt7b);
+  tft.drawFastHLine(40, 38, 160, COL_DGRAY);
+
+  // Job name
+  tft.fillRect(10, 50, 220, 30, COL_BG);
+  centerText(prn.nm, 74, COL_YELLOW, &FreeSansBold12pt7b);
+
   char buf[24], t[10];
-  u8g2.drawStr(0, 26, prn.nm);
 
   fmtTime(t, calcElapsed());
   snprintf(buf, sizeof(buf), "Elapsed  %s", t);
-  u8g2.drawStr(0, 38, buf);
+  centerText(buf, 112, COL_LGRAY, &FreeSans9pt7b);
 
   fmtTime(t, prn.rem + calcElapsed());
   snprintf(buf, sizeof(buf), "Total    %s", t);
-  u8g2.drawStr(0, 50, buf);
+  centerText(buf, 132, COL_LGRAY, &FreeSans9pt7b);
+
+  fmtTime(t, prn.rem);
+  snprintf(buf, sizeof(buf), "Remain   %s", t);
+  centerText(buf, 152, COL_GREEN, &FreeSans9pt7b);
+
+  snprintf(buf, sizeof(buf), "Layer  %d / %d", prn.ln, prn.tln);
+  centerText(buf, 172, COL_LGRAY, &FreeSans9pt7b);
 }
 
 void drawFilament() {
-  drawHeader(SCR_FILAMENT, "FILAMENT");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  centerText("FILAMENT", 30, COL_WHITE, &FreeSans9pt7b);
+  tft.drawFastHLine(40, 38, 160, COL_DGRAY);
+
   char buf[24];
-  snprintf(buf, sizeof(buf), "Slot   %s", prn.as_);  u8g2.drawStr(0, 24, buf);
-  snprintf(buf, sizeof(buf), "Type   %s", prn.at);   u8g2.drawStr(0, 34, buf);
-  snprintf(buf, sizeof(buf), "Brand  %s", prn.ab);   u8g2.drawStr(0, 44, buf);
-  snprintf(buf, sizeof(buf), "Rem    %d%%", prn.ar); u8g2.drawStr(0, 55, buf);
-  u8g2.drawFrame(60, 49, 50, 5);
-  int f = (int)(50.0f * prn.ar / 100.0f);
-  if (f > 0) u8g2.drawBox(60, 49, f, 5);
+
+  snprintf(buf, sizeof(buf), "Slot  %s", prn.as_);
+  centerText(buf, 72, COL_LGRAY, &FreeSans9pt7b);
+
+  centerText(prn.at, 98, COL_WHITE, &FreeSansBold18pt7b);
+  centerText(prn.ab, 122, COL_LGRAY, &FreeSans9pt7b);
+
+  // Remaining bar + %
+  snprintf(buf, sizeof(buf), "Rem  %d%%", prn.ar);
+  centerText(buf, 148, COL_GREEN, &FreeSans9pt7b);
+  drawBar(40, 155, 160, 10, prn.ar, COL_GREEN, COL_DGRAY);
 }
 
 void drawSystem() {
-  drawHeader(SCR_SYSTEM, "SYSTEM");
-  u8g2.setFont(u8g2_font_6x10_tf);
+  centerText("SYSTEM", 30, COL_WHITE, &FreeSans9pt7b);
+  tft.drawFastHLine(40, 38, 160, COL_DGRAY);
+
+  // State — large colored
+  centerText(prn.st, 88, stateColor(), &FreeSansBold18pt7b);
+
   char buf[24];
-  snprintf(buf, sizeof(buf), "State   %s", prn.st);   u8g2.drawStr(0, 26, buf);
-  snprintf(buf, sizeof(buf), "Nozzle  %smm", prn.nd); u8g2.drawStr(0, 38, buf);
-  snprintf(buf, sizeof(buf), "Speed   %d%%", prn.spd); u8g2.drawStr(0, 50, buf);
+  snprintf(buf, sizeof(buf), "Nozzle  %smm", prn.nd);
+  centerText(buf, 126, COL_LGRAY, &FreeSans9pt7b);
+
+  snprintf(buf, sizeof(buf), "Speed   %d%%", prn.spd);
+  centerText(buf, 148, COL_LGRAY, &FreeSans9pt7b);
+
+  snprintf(buf, sizeof(buf), "Layer  %d / %d", prn.ln, prn.tln);
+  centerText(buf, 170, COL_DGRAY, &FreeSans9pt7b);
 }
 
-// ── OLED main ─────────────────────────────────────────────────────────────────
-void drawOLED() {
-  u8g2.clearBuffer();
-  if (millis() - lastReceived > 10000) {
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(10, 30, "Connecting...");
-    u8g2.drawStr(8, 44, "Check config.py");
-    u8g2.sendBuffer();
+// ── TFT main draw ─────────────────────────────────────────────────────────────
+void drawTFT() {
+  bool connected = (millis() - lastReceived) < 10000;
+  bool screenChanged = (currentScreen != prevScreen);
+
+  if (!connected) {
+    if (screenChanged) {
+      tft.fillScreen(COL_BG);
+      prevScreen = currentScreen;
+    }
+    clearBand(90, 60);
+    centerText("Connecting...", 112, COL_LGRAY, &FreeSans9pt7b);
+    centerText("Check config.py", 132, COL_DGRAY, &FreeSans9pt7b);
     return;
   }
+
+  if (screenChanged) {
+    tft.fillScreen(COL_BG);
+    prevScreen = currentScreen;
+    drawPageDots();
+  }
+
   switch (currentScreen) {
     case SCR_PROGRESS:  drawProgress();  break;
     case SCR_TEMPS:     drawTemps();     break;
@@ -266,8 +361,9 @@ void drawOLED() {
     case SCR_FILAMENT:  drawFilament();  break;
     case SCR_SYSTEM:    drawSystem();    break;
   }
-  drawPageDots();
-  u8g2.sendBuffer();
+
+  // Redraw dots only when screen changed (already done above)
+  // but keep them visible by not overwriting
 }
 
 // ── LED Matrix ────────────────────────────────────────────────────────────────
@@ -275,69 +371,55 @@ int animStep = 0;
 unsigned long animLastMs = 0;
 
 void setPixel(int r, int c, uint8_t v) {
-  if (r >= 0 && r < 8 && c >= 0 && c < 13) frame[r*13+c] = v;
+  if (r>=0&&r<8&&c>=0&&c<13) frame[r*13+c]=v;
 }
-void clearFrame() { memset(frame, 0, sizeof(frame)); }
+void clearFrame() { memset(frame,0,sizeof(frame)); }
 
 void updateMatrix() {
   unsigned long now = millis();
   bool dirty = false;
-
-  if (strcmp(prn.st, "RUNNING") == 0) {
-    if (now - animLastMs > 120) {
-      animLastMs = now; animStep = (animStep+1)%13;
-      clearFrame();
-      for (int r = 0; r < 8; r++) {
-        setPixel(r, (animStep+r)%13, 255);
-        setPixel(r, (animStep+r+1)%13, 120);
-      }
-      dirty = true;
+  if (strcmp(prn.st,"RUNNING")==0) {
+    if (now-animLastMs>120) {
+      animLastMs=now; animStep=(animStep+1)%13; clearFrame();
+      for(int r=0;r<8;r++){setPixel(r,(animStep+r)%13,255);setPixel(r,(animStep+r+1)%13,120);}
+      dirty=true;
     }
-  } else if (strcmp(prn.st, "PAUSE") == 0) {
-    static bool vis = true;
-    if (now - animLastMs > 600) {
-      animLastMs = now; vis = !vis;
-      clearFrame();
-      if (vis) for (int r=0;r<8;r++) { setPixel(r,2,255);setPixel(r,3,255);setPixel(r,9,255);setPixel(r,10,255); }
-      dirty = true;
-    }
-  } else if (strcmp(prn.st, "FAILED") == 0) {
-    static bool vis = true;
-    if (now - animLastMs > 200) {
-      animLastMs = now; vis = !vis;
-      clearFrame();
-      if (vis) for (int r=0;r<8;r++) { setPixel(r,(r*12)/7,255); setPixel(r,12-(r*12)/7,255); }
-      dirty = true;
-    }
-  } else if (strcmp(prn.st, "FINISH") == 0) {
-    if (now - animLastMs > 2000) {
-      animLastMs = now; clearFrame();
+  } else if (strcmp(prn.st,"PAUSE")==0) {
+    static bool vis=true;
+    if(now-animLastMs>600){animLastMs=now;vis=!vis;clearFrame();
+      if(vis)for(int r=0;r<8;r++){setPixel(r,2,255);setPixel(r,3,255);setPixel(r,9,255);setPixel(r,10,255);}
+      dirty=true;}
+  } else if (strcmp(prn.st,"FAILED")==0) {
+    static bool vis=true;
+    if(now-animLastMs>200){animLastMs=now;vis=!vis;clearFrame();
+      if(vis)for(int r=0;r<8;r++){setPixel(r,(r*12)/7,255);setPixel(r,12-(r*12)/7,255);}
+      dirty=true;}
+  } else if (strcmp(prn.st,"FINISH")==0) {
+    if(now-animLastMs>2000){animLastMs=now;clearFrame();
       setPixel(7,0,255);setPixel(6,1,255);setPixel(5,2,255);
       setPixel(4,3,255);setPixel(3,4,255);setPixel(2,5,255);
       setPixel(1,6,255);setPixel(0,7,255);setPixel(0,8,255);
       setPixel(1,9,255);setPixel(2,10,255);setPixel(3,11,255);setPixel(4,12,255);
-      dirty = true;
-    }
+      dirty=true;}
   } else {
-    if (now - animLastMs > 1000) { animLastMs = now; clearFrame(); dirty = true; }
+    if(now-animLastMs>1000){animLastMs=now;clearFrame();dirty=true;}
   }
-  if (dirty) matrix.draw(frame);
+  if(dirty) matrix.draw(frame);
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────────
 void checkButtons() {
   unsigned long now = millis();
-  bool prev = (digitalRead(BTN_PREV) == LOW);
-  if (prev && !btnPrevState && (now-btnPrevMs > DEBOUNCE_MS)) {
-    btnPrevState = true; btnPrevMs = now;
-    currentScreen = (currentScreen-1+SCR_COUNT)%SCR_COUNT;
-  } else if (!prev) btnPrevState = false;
-
-  bool next = (digitalRead(BTN_NEXT) == LOW);
-  if (next && !btnNextState && (now-btnNextMs > DEBOUNCE_MS)) {
-    btnNextState = true; btnNextMs = now;
-    currentScreen = (currentScreen+1)%SCR_COUNT;
-  } else if (!next) btnNextState = false;
+  bool prev = (digitalRead(BTN_PREV)==LOW);
+  if(prev&&!btnPrevState&&(now-btnPrevMs>DEBOUNCE_MS)){
+    btnPrevState=true;btnPrevMs=now;
+    currentScreen=(currentScreen-1+SCR_COUNT)%SCR_COUNT;
+  } else if(!prev) btnPrevState=false;
+  bool next = (digitalRead(BTN_NEXT)==LOW);
+  if(next&&!btnNextState&&(now-btnNextMs>DEBOUNCE_MS)){
+    btnNextState=true;btnNextMs=now;
+    currentScreen=(currentScreen+1)%SCR_COUNT;
+  } else if(!next) btnNextState=false;
 }
 
 // ── Setup & Loop ──────────────────────────────────────────────────────────────
@@ -349,28 +431,29 @@ void setup() {
   matrix.begin();
   matrix.setGrayscaleBits(8);
 
-  u8g2.begin();
-  u8g2.setContrast(200);
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+
+  tft.begin();
+  tft.setRotation(0);
+  tft.fillScreen(COL_BG);
+
+  // Splash
+  centerText("BambuMonitor", 104, COL_GREEN, &FreeSansBold12pt7b);
+  centerText("Connecting...", 132, COL_DGRAY, &FreeSans9pt7b);
 
   pinMode(BTN_PREV, INPUT_PULLUP);
   pinMode(BTN_NEXT, INPUT_PULLUP);
-
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_8x13_tf);
-  u8g2.drawStr(10, 28, "BambuMonitor");
-  u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(20, 44, "Connecting...");
-  u8g2.sendBuffer();
 }
 
-unsigned long lastOledMs = 0;
+unsigned long lastTFTms = 0;
 
 void loop() {
   Bridge.update();
   checkButtons();
   updateMatrix();
-  if (millis() - lastOledMs > 100) {
-    lastOledMs = millis();
-    drawOLED();
+  if (millis() - lastTFTms > 500) {  // 2Hz refresh (TFT is larger than OLED)
+    lastTFTms = millis();
+    drawTFT();
   }
 }
